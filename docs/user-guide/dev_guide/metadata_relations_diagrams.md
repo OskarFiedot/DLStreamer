@@ -5,7 +5,7 @@ inside a single `GstAnalyticsRelationMeta` container on a `GstBuffer`. It
 describes a consistent set of conventions for connecting object detections,
 classifications, keypoints, segmentation and raw tensors using the `CONTAIN` /
 `IS_PART_OF` / `RELATE_TO` relations, and shows the difference between
-**whole-frame** and **per-region (ROI)** inference results.
+**full-frame** and **per-region (ROI)** inference results.
 
 ---
 
@@ -38,7 +38,7 @@ graph LR
 
 ## 1. Object detection (nesting)
 
-An object-detection stage adds one `ODMtd` per detected object. In whole-frame
+An object-detection stage adds one `ODMtd` per detected object. In full-frame
 detection the detections are top-level; when detection runs per region (inside an
 existing ROI), each new detection is nested under the parent ROI's `ODMtd`.
 
@@ -49,7 +49,7 @@ class is set). When present, the object type is the detection's primary class an
 is part of the `ODMtd` itself; any *additional* attribute of the same object is
 expressed as a separate `ClsMtd` linked via `CONTAIN`.
 
-Whole-frame:
+Full frame:
 
 ```mermaid
 graph TD
@@ -85,7 +85,7 @@ graph LR
   Cls -->|IS_PART_OF| OD
 ```
 
-Whole-frame classification - frame-level, no parent `ODMtd`; chained models add
+Full frame classification - frame-level, no parent `ODMtd`; chained models add
 sibling `ClsMtd`s:
 
 ```mermaid
@@ -125,7 +125,7 @@ graph TD
   K1 -.->|RELATE_TO| K2
 ```
 
-Whole-frame (single-person pose) - group is frame-level, no parent `ODMtd`:
+Full frame (single-person pose) - group is frame-level, no parent `ODMtd`:
 
 ```mermaid
 graph TD
@@ -176,12 +176,12 @@ A `SegmentationMtd` stores:
   gives the mask width/height;
 - the **mask location** rectangle `(x, y, w, h)` in image pixels that the mask
   covers (`gst_analytics_segmentation_mtd_get_mask` returns it); for a
-  whole-frame result this is `(0, 0, image_width, image_height)`;
+  full-frame result this is `(0, 0, image_width, image_height)`;
 - a set of **region ids** (`gst_analytics_segmentation_mtd_get_region_count` +
   `..._get_region_id(index)`) - for semantic segmentation each region id is the
   class id of a region present in the mask.
 
-Semantic segmentation is a whole-frame result with no parent `ODMtd`.
+Semantic segmentation is a full-frame result with no parent `ODMtd`.
 
 ```mermaid
 graph TD
@@ -252,14 +252,15 @@ graph LR
 ```
 
 Tracking always relates to an `ODMtd`, independent of how the detection was
-produced (whole-frame or per-region).
+produced (full-frame or per-region).
 
 ---
 
 ## 8. Combined example
 
-A pipeline running detection, per-region classification and pose, per-region
-instance segmentation, and tracking produces:
+A pipeline running frame-level detection model, per-region classification,
+per-region pose and per-region instance segmentation, along with object tracking
+produces:
 
 ```mermaid
 graph TD
@@ -288,9 +289,9 @@ graph TD
 
 ---
 
-## 9. Combined example - whole-frame only
+## 9. Combined example – frame-level analytics only
 
-Several whole-frame models chained (two classifiers, a single-person pose model,
+Several frame-level analytic models chained (two classifiers, a single-person pose model,
 and a segmentation model). **Every** result is frame-level: entries are siblings
 in the container with **no parent `ODMtd`**. Only the keypoint group has internal
 relations.
@@ -314,11 +315,11 @@ graph TD
 
 ---
 
-## 10. Combined example - whole-frame and per-region together
+## 10. Combined example – frame-level and per-region together
 
 A single buffer can carry both: some stages run per region while others run on
-the whole frame. The per-object result is `CONTAIN`-ed by its `ODMtd`, while the
-whole-frame results sit alongside as frame-level entries with no parent.
+the full-frame. The per-object result is `CONTAIN`-ed by its `ODMtd`, while the
+full-frame results sit alongside as frame-level entries with no parent.
 
 ```mermaid
 graph TD
@@ -333,25 +334,5 @@ graph TD
 ```
 
 - `OD` + `Cls` form the per-region part (attached via `CONTAIN` / `IS_PART_OF`).
-- `FCls` and `FSeg` are the whole-frame part: frame-level, **not** related to any
+- `FCls` and `FSeg` are the full-frame part: frame-level, **not** related to any
   `ODMtd`. Consumers distinguish them exactly by this absence of a parent `OD`.
-
----
-
-## 11. Relation summary table
-
-| From | Relation | To | Produced by | Region |
-|---|---|---|---|---|
-| `ODMtd` (parent) | CONTAIN / IS_PART_OF | `ODMtd` (child) | per-region detection | per-region |
-| `ODMtd` | CONTAIN / IS_PART_OF | `ClsMtd` | classification stage | per-region |
-| `ODMtd` | CONTAIN / IS_PART_OF | `GroupMtd` (keypoints) | keypoint stage | per-region |
-| `GroupMtd` | CONTAIN / IS_PART_OF | `KeypointMtd` | keypoint producer | both |
-| `KeypointMtd` | RELATE_TO | `KeypointMtd` | keypoint producer (skeleton) | both |
-| `ODMtd` | CONTAIN / IS_PART_OF | `TensorMtd` (instance seg) | instance-segmentation stage | per-region |
-| `ODMtd` | CONTAIN / IS_PART_OF | `TensorMtd` (generic) | any inference stage | per-region |
-| `ODMtd` | RELATE_TO | `TrackingMtd` | tracking stage | n/a |
-| (frame-level) | none (no parent) | `ClsMtd` / `GroupMtd` / `SegmentationMtd` / `TensorMtd` | whole-frame inference | whole-frame |
-
-**Whole-frame vs per-region, in one sentence:** in *whole-frame* inference the
-result mtds are frame-level (no parent `ODMtd`); in *per-region* inference they
-are `CONTAIN`-ed by the `ODMtd` of the ROI they were computed on.
