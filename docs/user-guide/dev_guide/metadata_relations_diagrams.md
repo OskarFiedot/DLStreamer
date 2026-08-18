@@ -4,7 +4,7 @@ A visual reference for how typed `GstAnalyticsMtd` entries relate to each other
 inside a single `GstAnalyticsRelationMeta` container on a `GstBuffer`. It
 describes a consistent set of conventions for connecting object detections,
 classifications, keypoints, segmentation and raw tensors using the `CONTAIN` /
-`IS_PART_OF` / `RELATE_TO` relations, and shows the difference between
+`IS_PART_OF` / `RELATE_TO` / `N_TO_N` relations, and shows the difference between
 **full-frame** and **per-region (ROI)** inference results.
 
 ---
