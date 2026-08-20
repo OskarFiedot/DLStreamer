@@ -33,10 +33,6 @@ graph LR
   `SegmentationMtd` (a group of `region_ids`) linked to a `ClsMtd` (a group of
   labels) so that region *i* maps to label *i*.
 
-> Besides the four relation types above, the API also defines the `NONE`
-> (`GST_ANALYTICS_REL_TYPE_NONE`) and `ANY` (`GST_ANALYTICS_REL_TYPE_ANY`)
-> sentinels, which are used only as query criteria and never stored as an edge.
-
 Every relation is stored as a **directed** edge in the relation-meta adjacency:
 `set_relation(type, a, b)` records `a->b` only. `CONTAIN` / `IS_PART_OF` are
 therefore set as a pair so the link is navigable both ways, while `RELATE_TO` and
@@ -177,25 +173,32 @@ graph TD
 
 ## 4. Segmentation
 
-A `SegmentationMtd` stores a discrete label mask that tags each pixel with a
-**region id**. Its `GstSegmentationType` distinguishes the two forms of
-segmentation:
+Segmentation results appear in the relation meta in a few shapes. A
+`SegmentationMtd` stores a **discrete label mask** that tags each pixel with a
+**region id**; its `GstSegmentationType` says how to read those ids:
 
 - **semantic** (`GST_SEGMENTATION_TYPE_SEMANTIC`): all objects of the same class
-  share a single region id, so the mask has one region per class present;
+  share a single region id, so the mask has one region per class present
+  (see 4.1);
 - **instance** (`GST_SEGMENTATION_TYPE_INSTANCE`): each object instance gets its
-  own region id, so two objects of the same class end up in different regions.
+  own region id, so two objects of the same class end up in different regions
+  (see 4.2).
 
-Both forms use the same storage and the same relations; only the meaning of a
-region id differs. A `SegmentationMtd` stores:
+Alternatively, a per-object **soft mask** (probabilities) can be stored as a
+`TensorMtd` instead of a discrete mask (see 4.3).
+
+Both `SegmentationMtd` forms use the same storage and the same relations; only
+the meaning of a region id differs. A `SegmentationMtd` stores:
 
 - the **segmentation type** above (`GstSegmentationType`);
 - a **mask** as a `GstBuffer` with an attached `GstVideoMeta`; the video format
-  encodes the region ids (e.g. `GRAY8`, or `GRAY16_LE` for >255 regions) and
-  gives the mask width/height;
+  encodes the region ids (e.g. `GRAY8`, or `GRAY16_LE` for >255 regions) and the
+  `GstVideoMeta` gives the mask's **own** width/height, stride and format;
 - the **mask location** rectangle `(x, y, w, h)` in image pixels that the mask
   covers (`gst_analytics_segmentation_mtd_get_mask` returns it); for a
-  full-frame result this is `(0, 0, image_width, image_height)`;
+  full-frame result this is `(0, 0, image_width, image_height)`. This rectangle
+  is independent of the mask's own pixel size - see *How the mask maps to the
+  image* below;
 - a set of **region ids** (accessed with the
   `gst_analytics_segmentation_mtd_get_region_count` and
   `gst_analytics_segmentation_mtd_get_region_id(index)` API). A region id is an
@@ -204,6 +207,26 @@ region id differs. A `SegmentationMtd` stores:
   an index map (index `0..N-1`, contiguous even when the raw ids are not, via
   `gst_analytics_segmentation_mtd_get_region_index`) so a region *index* can be
   matched to another mtd component-wise.
+
+**How the mask maps to the image.** The location rectangle `(x, y, w, h)` is
+given in *original image* pixel coordinates and marks the image region the mask
+describes: columns `x .. x+w` and rows `y .. y+h`. The mask buffer has its **own**
+pixel dimensions, taken from its `GstVideoMeta`, which are **independent** of
+`(w, h)` - the mask is not required to be `w x h` pixels. The metadata itself does
+**not** resample anything: it only stores the mask at its own resolution plus the
+rectangle it maps onto. Establishing the pixel correspondence is left to the
+**consumer**, which scales the mask onto the rectangle however it sees fit (e.g.
+nearest-neighbour: an image position `(x + dx, y + dy)` inside the rectangle reads
+the mask pixel at `col = dx * mask_width / w`, `row = dy * mask_height / h`). Only
+when the mask's own size equals `(w, h)` is the mapping 1:1 regardless of the
+scaling method.
+
+Example: for a `600x600` image and a `SegmentationMtd` with location
+`(100, 100, 200, 200)`, the mask applies to the image square
+`x in [100, 300), y in [100, 300)`. If the mask buffer is `200x200` each mask
+pixel maps to exactly one image pixel; if it is, say, `100x100` it is stretched
+2x so each mask pixel covers a `2x2` image block. A full-frame result would use
+`(0, 0, 600, 600)`.
 
 A `SegmentationMtd` is typically emitted at frame level with no parent `ODMtd`:
 
@@ -226,10 +249,13 @@ graph LR
   Seg ==>|N_TO_N| Cls
 ```
 
-Concretely, for a semantic mask with three regions (`background`, `strawberry`,
-`leaf`), the two groups are matched slot by slot - region *index i* to class
-*index i* - while the raw `region_id` painted in the mask (e.g. `12`, `31`) stays
-an opaque marker:
+### 4.1. Semantic Segmentation
+
+For semantic segmentation each region groups all pixels of one class, so every
+region maps to one class label. Concretely, for a mask with three regions
+(`background`, `strawberry`, `leaf`), the two groups are matched slot by slot -
+region *index i* to class *index i* - while the raw `region_id` painted in the
+mask (e.g. `12`, `31`) stays an opaque marker:
 
 ```mermaid
 graph LR
@@ -253,14 +279,16 @@ strawberry and `31` for the leaf. The `N_TO_N` relation resolves those markers
 to classes through their matching index, so `region_id` 0 = `background`,
 `region_id` 12 = `strawberry` and `region_id` 31 = `leaf`.
 
----
+### 4.2. Instance Segmentation with Region ID
 
-## 5. Per-object soft mask
+> _To be documented._
 
-Separately from the discrete `SegmentationMtd` above, a **soft mask** (per-pixel
-`FP32` probabilities) for a single object is stored as a `TensorMtd` attached to
-the owning detection. The tensor's `semantic_tag` carries a `.../seg-mask` suffix
-so consumers can tell it apart from a plain raw tensor (the leading part is up to
+### 4.3. Instance Segmentation with Soft-Mask
+
+Instead of a discrete `SegmentationMtd`, a per-object **soft mask** (per-pixel
+`FP32` probabilities) is stored as a `TensorMtd` attached to the owning
+detection. The tensor's `semantic_tag` carries a `.../seg-mask` suffix so
+consumers can tell it apart from a plain raw tensor (the leading part is up to
 the producer).
 
 ```mermaid
@@ -275,7 +303,7 @@ This is inherently a per-detection relation, so there is no frame-level variant.
 
 ---
 
-## 6. Generic raw tensor
+## 5. Generic raw tensor
 
 Any raw tensor payload is stored as a `TensorMtd`, which wraps a `GstTensor`
 (`id`, `data_type`, `dims`, and a data `GstBuffer`) and can carry a
@@ -302,7 +330,7 @@ graph TD
 
 ---
 
-## 7. Tracking
+## 6. Tracking
 
 A tracking stage associates a persistent `TrackingMtd`
 (`tracking_id`, `tracking_first_seen`, `tracking_last_seen`, `tracking_lost`)
@@ -320,7 +348,7 @@ produced (full-frame or per-region).
 
 ---
 
-## 8. Combined example
+## 7. Combined example
 
 A pipeline running frame-level detection model, per-region classification,
 per-region pose and per-region segmentation soft mask, along with object tracking
@@ -353,7 +381,7 @@ graph TD
 
 ---
 
-## 9. Combined example – frame-level analytics only
+## 8. Combined example – frame-level analytics only
 
 Several frame-level analytic models chained (two classifiers, a single-person pose model,
 and a segmentation model). **Every** result is frame-level: entries are siblings
@@ -379,7 +407,7 @@ graph TD
 
 ---
 
-## 10. Combined example – frame-level and per-region together
+## 9. Combined example – frame-level and per-region together
 
 A single buffer can carry both: some stages run per region while others run on
 the full-frame. The per-object result is `CONTAIN`-ed by its `ODMtd`, while the
