@@ -191,22 +191,27 @@ Both `SegmentationMtd` forms use the same storage and the same relations; only
 the meaning of a region id differs. A `SegmentationMtd` stores:
 
 - the **segmentation type** above (`GstSegmentationType`);
-- a **mask** as a `GstBuffer` with an attached `GstVideoMeta`; the video format
-  encodes the region ids (e.g. `GRAY8`, or `GRAY16_LE` for >255 regions) and the
-  `GstVideoMeta` gives the mask's **own** width/height, stride and format;
+- a **mask** as a `GstBuffer` - a single-plane `GRAY8` image (or `GRAY16_LE` for
+  \>255 regions) with an attached `GstVideoMeta`. **Every pixel value is a region
+  id**: the number the segmentation stage wrote for that pixel, *not* a class id.
+  The `GstVideoMeta` gives the mask's **own** width/height, stride and format;
 - the **mask location** rectangle `(x, y, w, h)` in image pixels that the mask
   covers (`gst_analytics_segmentation_mtd_get_mask` returns it); for a
   full-frame result this is `(0, 0, image_width, image_height)`. This rectangle
   is independent of the mask's own pixel size - see *How the mask maps to the
   image* below;
-- a set of **region ids** (accessed with the
+- the set of **region ids** present in the mask (accessed with the
   `gst_analytics_segmentation_mtd_get_region_count` and
-  `gst_analytics_segmentation_mtd_get_region_id(index)` API). A region id is an
-  **arbitrary value** with no meaning beyond marking that mask pixels sharing it
-  belong to the same region - it is *not* a class id. The ids are exposed through
-  an index map (index `0..N-1`, contiguous even when the raw ids are not, via
-  `gst_analytics_segmentation_mtd_get_region_index`) so a region *index* can be
-  matched to another mtd component-wise.
+  `gst_analytics_segmentation_mtd_get_region_id(index)` API). A region id is the
+  per-pixel marker above: all pixels carrying the same id form one region. The
+  value itself is assigned by the segmentation stage and means nothing on its own
+  (it is not a class id) - it only lets a region be identified and then linked to
+  other metadata. This holds for **both** segmentation types; only the assignment
+  differs (semantic: one id per class, instance: one id per object). To give a
+  region meaning (e.g. a class) the ids are exposed through a contiguous index
+  map (index `0..N-1`, even when the raw ids are not sequential, via
+  `gst_analytics_segmentation_mtd_get_region_index`) so region *index i* can be
+  paired with component *i* of another mtd via `N_TO_N` (see 4.1).
 
 **How the mask maps to the image.** The location rectangle `(x, y, w, h)` is
 given in *original image* pixel coordinates and marks the image region the mask
